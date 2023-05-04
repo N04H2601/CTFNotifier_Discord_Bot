@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import urllib3
+import pytz
 
 
 class CustomEncoder(json.JSONEncoder):
@@ -56,6 +57,7 @@ async def on_ready():
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="upcoming CTF events"))
     await bot.get_channel(CHANNEL_ID).send('Hello, I am CTF Bot 🤖\nTo see the list of commands, type `/help`.')
     await bot.get_channel(CHANNEL_ID).send(file=discord.File('hello.gif'))
+    check_agenda.start()
 
 
 @bot.command()
@@ -81,7 +83,11 @@ async def add(ctx, url):
                 'organizers': ', '.join([o['name'] for o in event['organizers']]),
                 'weight': event['weight'],
                 'description': event['description'],
-                'participants': event['participants']
+                'participants': event['participants'],
+                'reminder_sent': False,
+                'good_luck_sent': False,
+                'congratulations_sent': False,
+                'ending_soon_sent': False,
             }
             await ctx.send(f"Event `{event_name}` added.")
             with open('events.json', 'w') as f:
@@ -235,38 +241,50 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=10)
 async def check_agenda():
-    for event_name, event in events.items():
-        start_time = datetime.fromisoformat(
-            event['start']) + timedelta(hours=2)
-        end_time = datetime.fromisoformat(event['finish']) + timedelta(hours=2)
-        now = datetime.now()
+    tz = pytz.timezone('Europe/Paris')
 
-        if event['start'] - timedelta(hours=1) < now < event['start']:
+    events_to_delete = []
+
+    for event_name, event in events.items():
+        start_time = event['start'].astimezone(tz)
+        end_time = event['finish'].astimezone(tz)
+        now = datetime.now(tz)
+
+        if not event.get('reminder_sent') and start_time - timedelta(hours=1) <= now < start_time:
             channel = bot.get_channel(CHANNEL_ID)
             embed = discord.Embed(title=f"🚨 `{event_name}` starts in 1 hour!",
                                   description=f"Don't forget to prepare for the CTF at {start_time.strftime('%Y-%m-%d %H:%M:%S')}!",
                                   color=0xFF0000)
             await channel.send(embed=embed)
-        elif event['start'] < now < event['finish']:
+            event['reminder_sent'] = True
+        elif not event.get('good_luck_sent') and start_time <= now < end_time:
             channel = bot.get_channel(CHANNEL_ID)
             embed = discord.Embed(title=f"🍀 Good luck for `{event_name}` everyone!",
                                   description=f"The CTF is currently ongoing until {end_time.strftime('%Y-%m-%d %H:%M:%S')}.",
                                   color=0x00FF00)
             await channel.send(embed=embed)
-        elif event['finish'] < now:
+            event['good_luck_sent'] = True
+        elif not event.get('congratulations_sent') and end_time <= now < end_time + timedelta(hours=1):
             channel = bot.get_channel(CHANNEL_ID)
             embed = discord.Embed(title=f"🎉 Congratulations for `{event_name}` everyone!",
                                   description=f"The CTF ended at {end_time.strftime('%Y-%m-%d %H:%M:%S')}.",
                                   color=0x00FFFF)
             await channel.send(embed=embed)
-            del events[event_name]
-        elif event['finish'] - timedelta(hours=1) < now < event['finish']:
+            event['congratulations_sent'] = True
+            events_to_delete.append(event_name)
+        elif not event.get('ending_soon_sent') and end_time - timedelta(hours=1) <= now < end_time:
             channel = bot.get_channel(CHANNEL_ID)
             embed = discord.Embed(title=f"⏰ `{event_name}` ends in 1 hour!",
                                   description=f"Hurry up and submit your flags before the CTF ends at {end_time.strftime('%Y-%m-%d %H:%M:%S')}!",
                                   color=0xFFA500)
             await channel.send(embed=embed)
+            event['ending_soon_sent'] = True
+        
+    for event_name in events_to_delete:
+        del events[event_name]
+        with open('events.json', 'w') as f:
+            json.dump(events, f, indent=4)
 
 bot.run(TOKEN)
