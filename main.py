@@ -10,7 +10,27 @@ from dotenv import load_dotenv
 import urllib3
 import pytz
 
-# Your custom encoder and decoder remain the same
+
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+class CustomDecoder(json.JSONDecoder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(object_hook=self.object_hook, *args, **kwargs)
+
+    def object_hook(self, obj):
+        for key, value in obj.items():
+            if isinstance(value, str):
+                try:
+                    obj[key] = datetime.fromisoformat(value)
+                except ValueError:
+                    pass
+        return obj
+
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
